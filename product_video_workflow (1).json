@@ -1,0 +1,222 @@
+{
+  "name": "Product Video Generator Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute",
+              "minute": 30
+            },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "your-sheet-id",
+          "mode": "list"
+        },
+        "sheetName": "Products",
+        "range": "E{{$json.rowIndex}}",
+        "dataMode": "define",
+        "fieldsUi": {
+          "values": [
+            {
+              "column": "Video Status",
+              "value": "Image Processing Failed"
+            },
+            {
+              "column": "Error Details",
+              "value": "={{$json.errorMessage || $json.processingNotes}}"
+            },
+            {
+              "column": "Processing Date",
+              "value": "={{$now}}"
+            }
+          ]
+        }
+      },
+      "id": "update-error-status",
+      "name": "Update Error Status",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1780, 420],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-credentials",
+          "name": "Google Sheets Account"
+        }
+      }
+    }
+          ]
+        },
+        "triggerOn": "specificSheet",
+        "sheetName": "Products",
+        "options": {
+          "range": "A:D"
+        }
+      },
+      "id": "google-sheets-trigger",
+      "name": "Google Sheets - Product List",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [240, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-credentials",
+          "name": "Google Sheets Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Filter new products that need video generation\nconst items = $input.all();\nconst newProducts = [];\n\nfor (const item of items) {\n  const data = item.json;\n  \n  // Check if product has image URL and doesn't have video generated yet\n  if (data['Image URL'] && !data['Video Status']) {\n    newProducts.push({\n      json: {\n        productId: data['Product ID'] || data['A'],\n        productName: data['Product Name'] || data['B'],\n        imageUrl: data['Image URL'] || data['C'],\n        category: data['Category'] || data['D'] || 'General',\n        rowIndex: item.json.row || newProducts.length + 2\n      }\n    });\n  }\n}\n\nif (newProducts.length === 0) {\n  throw new Error('No new products to process');\n}\n\nreturn newProducts;"
+      },
+      "id": "filter-products",\n      "name": "Filter New Products",\n      "type": "n8n-nodes-base.function",\n      "typeVersion": 1,\n      "position": [900, 300]\n    },\n    {\n      "parameters": {\n        "functionCode": "// Smart Input Processing Agent - Handles JPG, PNG, Chrome URLs, and various input formats\nconst items = $input.all();\nconst processedItems = [];\n\nfor (const item of items) {\n  const imageUrl = item.json.imageUrl;\n  let processedUrl = imageUrl;\n  let inputType = 'unknown';\n  let needsConversion = false;\n  \n  // Detect input type and format\n  if (imageUrl) {\n    // Check for Chrome URLs (chrome-extension://, chrome://, etc.)\n    if (imageUrl.includes('chrome://') || imageUrl.includes('chrome-extension://')) {\n      inputType = 'chrome-url';\n      needsConversion = true;\n      // Chrome URLs need to be converted to accessible format\n      processedUrl = null; // Will handle in next step\n    }\n    // Check for direct image files\n    else if (imageUrl.match(/\\.(jpg|jpeg|png|gif|webp|bmp)(\\?.*)?$/i)) {\n      inputType = 'direct-image';\n      needsConversion = false;\n    }\n    // Check for Google Drive links\n    else if (imageUrl.includes('drive.google.com')) {\n      inputType = 'google-drive';\n      needsConversion = true;\n      // Convert Google Drive share link to direct image link\n      const fileId = imageUrl.match(/\\/d\\/([a-zA-Z0-9-_]+)/);\n      if (fileId) {\n        processedUrl = `https://drive.google.com/uc?export=view&id=${fileId[1]}`;\n        needsConversion = false;\n      }\n    }\n    // Check for Dropbox links\n    else if (imageUrl.includes('dropbox.com')) {\n      inputType = 'dropbox';\n      needsConversion = true;\n      processedUrl = imageUrl.replace('dropbox.com', 'dl.dropboxusercontent.com').replace('?dl=0', '');\n      needsConversion = false;\n    }\n    // Check for OneDrive links\n    else if (imageUrl.includes('onedrive.live.com') || imageUrl.includes('1drv.ms')) {\n      inputType = 'onedrive';\n      needsConversion = true;\n      // OneDrive links need special handling\n    }\n    // Check for Amazon S3 or other cloud storage\n    else if (imageUrl.includes('amazonaws.com') || imageUrl.includes('s3.')) {\n      inputType = 's3-storage';\n      needsConversion = false;\n    }\n    // Check for base64 encoded images\n    else if (imageUrl.startsWith('data:image/')) {\n      inputType = 'base64-image';\n      needsConversion = false;\n    }\n    // Regular web URLs\n    else if (imageUrl.startsWith('http')) {\n      inputType = 'web-url';\n      needsConversion = false;\n    }\n    // Local file paths\n    else if (imageUrl.includes('C:\\\\') || imageUrl.includes('/Users/') || imageUrl.startsWith('./')) {\n      inputType = 'local-file';\n      needsConversion = true;\n      processedUrl = null; // Cannot process local files directly\n    }\n  }\n  \n  processedItems.push({\n    json: {\n      ...item.json,\n      originalImageUrl: imageUrl,\n      processedImageUrl: processedUrl,\n      inputType: inputType,\n      needsConversion: needsConversion,\n      processingStatus: needsConversion ? 'needs-processing' : 'ready',\n      detectedFormat: imageUrl ? imageUrl.split('.').pop().toLowerCase() : 'unknown'\n    }\n  });\n}\n\nreturn processedItems;"\n      },\n      "id": "smart-input-agent",\n      "name": "Smart Input Processing Agent",\n      "type": "n8n-nodes-base.function",\n      "typeVersion": 1,\n      "position": [680, 300]\n    },\n    {\n      "parameters": {\n        "conditions": {\n          "string": [\n            {\n              "value1": "={{$json.needsConversion}}",\n              "operation": "equal",\n              "value2": "true"\n            }\n          ]\n        }\n      },\n      "id": "check-conversion-needed",\n      "name": "Check if Conversion Needed",\n      "type": "n8n-nodes-base.if",\n      "typeVersion": 1,\n      "position": [2220, 180],\n    },\n    {\n      "parameters": {\n        "functionCode": "// Advanced URL and File Conversion Handler\nconst items = $input.all();\nconst convertedItems = [];\n\nfor (const item of items) {\n  const inputType = item.json.inputType;\n  const originalUrl = item.json.originalImageUrl;\n  let convertedUrl = originalUrl;\n  let conversionMethod = 'none';\n  let conversionStatus = 'success';\n  let errorMessage = null;\n  \n  try {\n    switch (inputType) {\n      case 'chrome-url':\n        conversionMethod = 'chrome-screenshot';\n        // For Chrome URLs, we'll need to use a screenshot service\n        convertedUrl = `https://api.urlbox.io/v1/YOUR_API_KEY/png?url=${encodeURIComponent(originalUrl)}&width=1200&height=800`;\n        // Alternative: use screenshot API like ScreenshotAPI, ApiFlash, etc.\n        break;\n        \n      case 'onedrive':\n        conversionMethod = 'onedrive-direct';\n        // Convert OneDrive sharing link to direct link\n        if (originalUrl.includes('onedrive.live.com')) {\n          const encodedUrl = originalUrl.split('/');\n          const resId = encodedUrl[encodedUrl.length - 1];\n          convertedUrl = `https://api.onedrive.com/v1.0/shares/${resId}/root/content`;\n        } else if (originalUrl.includes('1drv.ms')) {\n          // Short URL - needs expansion first\n          convertedUrl = originalUrl; // Will handle via HTTP redirect\n        }\n        break;\n        \n      case 'local-file':\n        conversionMethod = 'local-file-error';\n        conversionStatus = 'error';\n        errorMessage = 'Local file paths cannot be processed. Please upload to cloud storage.';\n        convertedUrl = null;\n        break;\n        \n      default:\n        conversionMethod = 'no-conversion-needed';\n        convertedUrl = originalUrl;\n    }\n    \n    convertedItems.push({\n      json: {\n        ...item.json,\n        processedImageUrl: convertedUrl,\n        conversionMethod: conversionMethod,\n        conversionStatus: conversionStatus,\n        errorMessage: errorMessage,\n        processingStatus: conversionStatus === 'success' ? 'ready' : 'error'\n      }\n    });\n    \n  } catch (error) {\n    convertedItems.push({\n      json: {\n        ...item.json,\n        processedImageUrl: null,\n        conversionMethod: 'error',\n        conversionStatus: 'error',\n        errorMessage: error.message,\n        processingStatus: 'error'\n      }\n    });\n  }\n}\n\nreturn convertedItems;"\n      },\n      "id": "url-converter",\n      "name": "URL & File Converter",\n      "type": "n8n-nodes-base.function",\n      "typeVersion": 1,\n      "position": [1120, 180]\n    },\n    {\n      "parameters": {\n        "requestMethod": "GET",\n        "url": "={{$json.processedImageUrl}}",\n        "options": {\n          "headers": {\n            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"\n          },\n          "response": {\n            "response": {\n              "responseFormat": "file"\n            }\n          },\n          "redirect": {\n            "redirect": {\n              "followRedirect": true,\n              "maxRedirects": 5\n            }\n          }\n        }\n      },\n      "id": "download-image",\n      "name": "Download & Validate Image",\n      "type": "n8n-nodes-base.httpRequest",\n      "typeVersion": 4,\n      "position": [1340, 180]\n    },\n    {\n      "parameters": {\n        "functionCode": "// Image Validation and Format Standardization\nconst items = $input.all();\nconst validatedItems = [];\n\nfor (const item of items) {\n  let imageStatus = 'valid';\n  let processingNotes = [];\n  let finalImageUrl = item.json.processedImageUrl;\n  \n  // Check if image was successfully downloaded\n  if (item.binary && item.binary.data) {\n    const mimeType = item.binary.data.mimeType;\n    const fileSize = item.binary.data.fileSize || 0;\n    \n    // Validate image type\n    if (!mimeType || !mimeType.startsWith('image/')) {\n      imageStatus = 'invalid';\n      processingNotes.push('Invalid file type - not an image');\n    }\n    \n    // Check file size (should be reasonable for processing)\n    if (fileSize > 10 * 1024 * 1024) { // 10MB limit\n      imageStatus = 'warning';\n      processingNotes.push('Large file size - may slow processing');\n    }\n    \n    if (fileSize < 1000) { // Very small files\n      imageStatus = 'warning';\n      processingNotes.push('Very small file size - may be low quality');\n    }\n    \n    // For successful downloads, use the original URL\n    // (the binary data is now available for processing)\n    finalImageUrl = item.json.processedImageUrl;\n    processingNotes.push(`Image validated: ${mimeType}, ${Math.round(fileSize/1024)}KB`);\n    \n  } else {\n    // If download failed, try to use original URL directly\n    imageStatus = 'fallback';\n    finalImageUrl = item.json.originalImageUrl;\n    processingNotes.push('Using original URL as fallback');\n  }\n  \n  validatedItems.push({\n    json: {\n      ...item.json,\n      finalImageUrl: finalImageUrl,\n      imageStatus: imageStatus,\n      processingNotes: processingNotes.join('; '),\n      readyForAnalysis: imageStatus !== 'invalid'\n    }\n  });\n}\n\nreturn validatedItems;"\n      },\n      "id": "image-validator",\n      "name": "Image Validator",\n      "type": "n8n-nodes-base.function",\n      "typeVersion": 1,\n      "position": [1560, 180]\n    },\n    {\n      "parameters": {\n        "conditions": {\n          "boolean": [\n            {\n              "value1": "={{$json.readyForAnalysis}}",\n              "value2": true\n            }\n          ]\n        }\n      },\n      "id": "check-ready-for-analysis",\n      "name": "Ready for Analysis?",\n      "type": "n8n-nodes-base.if",\n      "typeVersion": 1,\n      "position": [1780, 180]\n    },
+    {
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "requestMethod": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "options": {
+          "headers": {
+            "Content-Type": "application/json"
+          }
+        },
+        "jsonParameters": true,
+        "bodyJson": "{\n  \"model\": \"gpt-4-vision-preview\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are an expert product analyst. Analyze product images and extract detailed information including product type, features, benefits, target audience, and marketing angles. Always respond in valid JSON format.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": [\n        {\n          \"type\": \"text\",\n          \"text\": \"Analyze this product image comprehensively. Provide detailed analysis in JSON format with these exact keys:\\n\\n{\\n  \\\"productType\\\": \\\"category/type of product\\\",\\n  \\\"description\\\": \\\"detailed product description\\\",\\n  \\\"keyFeatures\\\": [\\\"feature1\\\", \\\"feature2\\\", \\\"feature3\\\"],\\n  \\\"benefits\\\": [\\\"benefit1\\\", \\\"benefit2\\\"],\\n  \\\"targetAudience\\\": \\\"primary target market\\\",\\n  \\\"useCases\\\": [\\\"usecase1\\\", \\\"usecase2\\\"],\\n  \\\"marketingAngles\\\": [\\\"angle1\\\", \\\"angle2\\\"],\\n  \\\"qualityAssessment\\\": \\\"assessment of product quality/appeal\\\",\\n  \\\"competitiveAdvantages\\\": [\\\"advantage1\\\", \\\"advantage2\\\"],\\n  \\\"suggestedPrice\\\": \\\"estimated price range\\\",\\n  \\\"seasonality\\\": \\\"any seasonal relevance\\\",\\n  \\\"brandingNotes\\\": \\\"observations about branding/presentation\\\"\\n}\\n\\nImage Input Details:\\n- Original URL: {{$json.originalImageUrl}}\\n- Input Type: {{$json.inputType}}\\n- Processing Status: {{$json.processingNotes}}\\n- Image Status: {{$json.imageStatus}}\"\n        },\n        {\n          \"type\": \"image_url\",\n          \"image_url\": {\n            \"url\": \"{{$json.finalImageUrl}}\",\n            \"detail\": \"high\"\n          }\n        }\n      ]\n    }\n  ],\n  \"max_tokens\": 800,\n  \"temperature\": 0.3\n}"
+      },
+      "id": "analyze-image-openai",
+      "name": "Analyze Image (OpenAI - Primary)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2000, 180],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-credentials",
+          "name": "OpenAI Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "https://api.perplexity.ai/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "headers": {
+            "Content-Type": "application/json"
+          }
+        },
+        "jsonParameters": true,
+        "bodyJson": "{\n  \"model\": \"llama-3.1-sonar-large-128k-online\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are an expert product analyst. Analyze product images and extract detailed information. Always respond in valid JSON format. Use your online search capabilities to provide current market context.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Analyze this product image and provide detailed analysis in JSON format. Image URL: {{$json.finalImageUrl}}\\n\\nProduct Context:\\n- Product Name: {{$json.productName}}\\n- Category: {{$json.category}}\\n- Original URL: {{$json.originalImageUrl}}\\n\\nProvide analysis with these exact keys:\\n{\\n  \\\"productType\\\": \\\"category/type\\\",\\n  \\\"description\\\": \\\"detailed description\\\",\\n  \\\"keyFeatures\\\": [\\\"feature1\\\", \\\"feature2\\\"],\\n  \\\"benefits\\\": [\\\"benefit1\\\", \\\"benefit2\\\"],\\n  \\\"targetAudience\\\": \\\"target market\\\",\\n  \\\"useCases\\\": [\\\"use1\\\", \\\"use2\\\"],\\n  \\\"marketingAngles\\\": [\\\"angle1\\\", \\\"angle2\\\"],\\n  \\\"qualityAssessment\\\": \\\"quality notes\\\",\\n  \\\"competitiveAdvantages\\\": [\\\"advantage1\\\"],\\n  \\\"suggestedPrice\\\": \\\"price range\\\",\\n  \\\"seasonality\\\": \\\"seasonal info\\\",\\n  \\\"brandingNotes\\\": \\\"branding observations\\\",\\n  \\\"marketTrends\\\": \\\"current market trends for this product type\\\"\\n}\\n\\nUse your online search to provide current market insights and competitive analysis.\"\n    }\n  ],\n  \"temperature\": 0.3,\n  \"max_tokens\": 800\n}"
+      },
+      "id": "analyze-image-perplexity",
+      "name": "Analyze Image (Perplexity - Fallback)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2000, 360],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "perplexity-credentials",
+          "name": "Perplexity API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Smart Image Analysis Router - Handles API limits and fallbacks\nconst items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  let analysisSource = 'unknown';\n  let shouldRetry = false;\n  let usePerplexity = false;\n  \n  // Check for OpenAI rate limit or error indicators\n  if (item.json.error) {\n    const error = item.json.error;\n    \n    // Check for common OpenAI limit errors\n    if (error.code === 'rate_limit_exceeded' || \n        error.code === 'insufficient_quota' ||\n        error.message?.includes('rate limit') ||\n        error.message?.includes('quota') ||\n        error.message?.includes('limit exceeded')) {\n      \n      console.log('OpenAI limit detected, switching to Perplexity');\n      usePerplexity = true;\n      analysisSource = 'perplexity-fallback';\n    }\n  }\n  \n  // Check if we got a successful OpenAI response\n  else if (item.json.choices && item.json.choices[0]) {\n    analysisSource = 'openai-primary';\n  }\n  \n  // If no proper response, flag for Perplexity\n  else if (!item.json.choices) {\n    usePerplexity = true;\n    analysisSource = 'perplexity-retry';\n  }\n  \n  results.push({\n    json: {\n      ...item.json,\n      analysisSource: analysisSource,\n      usePerplexity: usePerplexity,\n      shouldRetry: shouldRetry,\n      routingDecision: usePerplexity ? 'route-to-perplexity' : 'continue-with-openai'\n    }\n  });\n}\n\nreturn results;"
+      },
+      "id": "analysis-router",
+      "name": "Smart Analysis Router",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2220, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [\n            {\n              \"value1\": \"={{$json.usePerplexity}}\",\n              \"value2\": true\n            }\n          ]\n        }\n      },\n      \"id\": \"check-use-perplexity\",\n      \"name\": \"Use Perplexity?\",\n      \"type\": \"n8n-nodes-base.if\",\n      \"typeVersion\": 1,\n      \"position\": [2440, 300]\n    },
+    {
+      "parameters": {
+        "functionCode": "// Parse OpenAI response and extract product analysis\nconst items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  try {\n    const response = item.json.choices[0].message.content;\n    let analysis;\n    \n    // Try to parse JSON response\n    try {\n      analysis = JSON.parse(response);\n    } catch (e) {\n      // If not JSON, create structured object from text\n      analysis = {\n        description: response.substring(0, 200),\n        features: ['Key product features'],\n        audience: 'General consumers',\n        useCases: ['General use']\n      };\n    }\n    \n    results.push({\n      json: {\n        ...item.json,\n        analysis: analysis,\n        description: analysis.description,\n        features: Array.isArray(analysis.features) ? analysis.features.join(', ') : analysis.features,\n        audience: analysis.audience,\n        useCases: Array.isArray(analysis.useCases) ? analysis.useCases.join(', ') : analysis.useCases\n      }\n    });\n  } catch (error) {\n    console.log('Error parsing analysis:', error);\n    results.push({\n      json: {\n        ...item.json,\n        description: 'Product analysis failed',\n        features: 'Unable to determine',\n        audience: 'General',\n        useCases: 'Various applications'\n      }\n    });\n  }\n}\n\nreturn results;"
+      },
+      "id": "parse-analysis",
+      "name": "Parse Image Analysis",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "requestMethod": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "options": {
+          "headers": {
+            "Content-Type": "application/json"
+          }
+        },
+        "jsonParameters": true,
+        "bodyJson": "{\n  \"model\": \"gpt-4\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a professional video script writer specializing in product marketing videos. Create engaging, concise scripts for 30-60 second product videos.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Create a video script for this product:\\n\\nProduct: {{$json.productName}}\\nDescription: {{$json.description}}\\nFeatures: {{$json.features}}\\nTarget Audience: {{$json.audience}}\\nUse Cases: {{$json.useCases}}\\n\\nFormat the script with:\\n- Hook (attention-grabbing opening)\\n- Problem/Need\\n- Solution (product introduction)\\n- Benefits (key features)\\n- Call to Action\\n\\nKeep it under 150 words and engaging for video format.\"\n    }\n  ],\n  \"max_tokens\": 400\n}"
+      },
+      "id": "generate-script",
+      "name": "Generate Video Script",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [3760, 180],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-credentials",
+          "name": "OpenAI Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Extract and format video script\nconst items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const script = item.json.choices[0].message.content;\n  \n  results.push({\n    json: {\n      ...item.json,\n      videoScript: script,\n      scriptFormatted: script.replace(/\\n/g, ' | '),\n      timestamp: new Date().toISOString()\n    }\n  });\n}\n\nreturn results;"
+      },
+      "id": "format-script",
+      "name": "Format Video Script",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [3980, 180],
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "requestMethod": "POST",
+        "url": "https://api.synthesia.io/v2/videos",
+        "options": {
+          "headers": {
+            "Content-Type": "application/json"
+          }
+        },
+        "jsonParameters": true,
+        "bodyJson": "{\n  \"test\": false,\n  \"visibility\": \"private\",\n  \"templateId\": \"your-template-id\",\n  \"templateData\": {\n    \"product_name\": \"{{$json.productName}}\",\n    \"script\": \"{{$json.videoScript}}\"\n  },\n  \"title\": \"{{$json.productName}} - Product Video\",\n  \"description\": \"Automated product video for {{$json.productName}}\",\n  \"callbackId\": \"{{$json.productId}}\"\n}"
+      },
+      "id": "create-video-synthesia",
+      "name": "Create Video (Synthesia)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [4200, 180],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "synthesia-credentials",
+          "name": "Synthesia API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpBasicAuth",
+        "requestMethod": "POST",
+        "url": "https://api.pictory.ai/pictoryapis/v1/video/storyboard",
+        "options": {
+          "headers": {
+            "Content-Type": "application/json\",\n            \"X-Pictory-User-Id\": \"your-user-id\"\n          }\n        },\n        \"jsonParameters\": true,\n        \"bodyJson\": \"{\n  \\\"jobId\\\": \\\"{{$json.productId}}-{{$now}}\\\",\n  \\\"script\\\": \\\"{{$json.videoScript}}\\\",\n  \\\"video_name\\\": \\\"{{$json.productName}} Product Video\\\",\n  \\\"language\\\": \\\"en\\\",\n  \\\"brandLogo\\\": {}\n}\"\n      },\n      \"id\": \"create-video-pictory\",\n      \"name\": \"Create Video (Pictory - Alternative)\",\n      \"type\": \"n8n-nodes-base.httpRequest\",\n      \"typeVersion\": 4,\n      \"position\": [1560, 360],\n      \"credentials\": {\n        \"httpBasicAuth\": {\n          \"id\": \"pictory-credentials\",\n          \"name\": \"Pictory API\"\n        }\n      }\n    },\n    {\n      \"parameters\": {\n        \"unit\": \"minutes\",\n        \"amount\": 5\n      },\n      \"id\": \"wait-for-video\",\n      \"name\": \"Wait for Video Generation\",\n      \"type\": \"n8n-nodes-base.wait\",\n      \"typeVersion\": 1,\n      \"position\": [1780, 300]\n    },\n    {\n      \"parameters\": {\n        \"requestMethod\": \"GET\",\n        \"url\": \"https://api.synthesia.io/v2/videos/{{$json.id}}\",\n        \"options\": {\n          \"headers\": {\n            \"Authorization\": \"Bearer {{$credentials.synthensia_api.token}}\"\n          }\n        }\n      },\n      \"id\": \"check-video-status\",\n      \"name\": \"Check Video Status\",\n      \"type\": \"n8n-nodes-base.httpRequest\",\n      \"typeVersion\": 4,\n      \"position\": [2000, 300]\n    },\n    {\n      \"parameters\": {\n        \"conditions\": {\n          \"string\": [\n            {\n              \"value1\": \"={{$json.status}}\",\n              \"operation\": \"equal\",\n              \"value2\": \"complete\"\n            }\n          ]\n        }\n      },\n      \"id\": \"check-completion\",\n      \"name\": \"Check if Complete\",\n      \"type\": \"n8n-nodes-base.if\",\n      \"typeVersion\": 1,\n      \"position\": [2220, 300]\n    },\n    {\n      \"parameters\": {\n        \"requestMethod\": \"GET\",\n        \"url\": \"={{$json.download_url || $json.videoUrl}}\",\n        \"options\": {\n          \"response\": {\n            \"response\": {\n              \"responseFormat\": \"file\"\n            }\n          }\n        }\n      },\n      \"id\": \"download-video\",\n      \"name\": \"Download Video\",\n      \"type\": \"n8n-nodes-base.httpRequest\",\n      \"typeVersion\": 4,\n      \"position\": [2440, 180]\n    },\n    {\n      \"parameters\": {\n        \"operation\": \"upload\",\n        \"fileId\": {\n          \"__rl\": true,\n          \"value\": \"name\",\n          \"mode\": \"list\"\n        },\n        \"name\": \"={{$json.productName}}_video_{{$now}}.mp4\",\n        \"parents\": {\n          \"__rl\": true,\n          \"value\": \"your-drive-folder-id\",\n          \"mode\": \"list\"\n        },\n        \"options\": {}\n      },\n      \"id\": \"upload-to-drive\",\n      \"name\": \"Upload to Google Drive\",\n      \"type\": \"n8n-nodes-base.googleDrive\",\n      \"typeVersion\": 3,\n      \"position\": [2660, 180],\n      \"credentials\": {\n        \"googleDriveOAuth2Api\": {\n          \"id\": \"google-drive-credentials\",\n          \"name\": \"Google Drive Account\"\n        }\n      }\n    },\n    {\n      \"parameters\": {\n        \"operation\": \"update\",\n        \"documentId\": {\n          \"__rl\": true,\n          \"value\": \"your-sheet-id\",\n          \"mode\": \"list\"\n        },\n        \"sheetName\": \"Products\",\n        \"range\": \"E{{$json.rowIndex}}\",\n        \"options\": {\n          \"valueInputMode\": \"raw\"\n        },\n        \"dataMode\": \"define\",\n        \"fieldsUi\": {\n          \"values\": [\n            {\n              \"column\": \"Video Status\",\n              \"value\": \"Complete\"\n            },\n            {\n              \"column\": \"Video URL\",\n              \"value\": \"={{$json.webViewLink}}\"\n            },\n            {\n              \"column\": \"Generated Date\",\n              \"value\": \"={{$now}}\"\n            }\n          ]\n        }\n      },\n      \"id\": \"update-sheet-status\",\n      \"name\": \"Update Sheet Status\",\n      \"type\": \"n8n-nodes-base.googleSheets\",\n      \"typeVersion\": 4,\n      \"position\": [2880, 180],\n      \"credentials\": {\n        \"googleSheetsOAuth2Api\": {\n          \"id\": \"google-sheets-credentials\",\n          \"name\": \"Google Sheets Account\"\n        }\n      }\n    },\n    {\n      \"parameters\": {\n        \"unit\": \"minutes\",\n        \"amount\": 2\n      },\n      \"id\": \"retry-wait\",\n      \"name\": \"Wait Before Retry\",\n      \"type\": \"n8n-nodes-base.wait\",\n      \"typeVersion\": 1,\n      \"position\": [2440, 420]\n    },\n    {\n      \"parameters\": {\n        \"operation\": \"update\",\n        \"documentId\": {\n          \"__rl\": true,\n          \"value\": \"your-sheet-id\",\n          \"mode\": \"list\"\n        },\n        \"sheetName\": \"Products\",\n        \"range\": \"E{{$json.rowIndex}}\",\n        \"dataMode\": \"define\",\n        \"fieldsUi\": {\n          \"values\": [\n            {\n              \"column\": \"Video Status\",\n              \"value\": \"Processing\"\n            }\n          ]\n        }\n      },\n      \"id\": \"update-processing-status\",\n      \"name\": \"Update Processing Status\",\n      \"type\": \"n8n-nodes-base.googleSheets\",\n      \"typeVersion\": 4,\n      \"position\": [2440, 420],\n      \"credentials\": {\n        \"googleSheetsOAuth2Api\": {\n          \"id\": \"google-sheets-credentials\",\n          \"name\": \"Google Sheets Account\"\n        }\n      }\n    }\n  ],\n  \"connections\": {\n    \"Google Sheets - Product List\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Filter New Products\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Filter New Products\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Analyze Product Image\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Analyze Product Image\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Parse Image Analysis\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Parse Image Analysis\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Generate Video Script\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Generate Video Script\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Format Video Script\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Format Video Script\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Create Video (Synthesia)\",\n            \"type\": \"main\",\n            \"index\": 0\n          },\n          {\n            \"node\": \"Create Video (Pictory - Alternative)\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Create Video (Synthesia)\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Wait for Video Generation\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Create Video (Pictory - Alternative)\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Wait for Video Generation\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Wait for Video Generation\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Check Video Status\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Check Video Status\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Check if Complete\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Check if Complete\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Download Video\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ],\n        [\n          {\n            \"node\": \"Wait Before Retry\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Download Video\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Upload to Google Drive\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Upload to Google Drive\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Update Sheet Status\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Wait Before Retry\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Update Processing Status\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Update Processing Status\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Check Video Status\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    }\n  },\n  \"active\": true,\n  \"settings\": {\n    \"timezone\": \"UTC\",\n    \"saveManualExecutions\": true,\n    \"callerPolicy\": \"workflowsFromSameOwner\",\n    \"executionOrder\": \"v1\"\n  },\n  \"staticData\": {},\n  \"meta\": {\n    \"templateCredsSetupCompleted\": false\n  },\n  \"pinData\": {},\n  \"versionId\": \"1\",\n  \"triggerCount\": 1\n}"
